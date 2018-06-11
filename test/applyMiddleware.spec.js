@@ -1,10 +1,20 @@
-import expect from 'expect'
-import { createStore, applyMiddleware } from '../src/index'
+import { createStore, applyMiddleware } from '../'
 import * as reducers from './helpers/reducers'
 import { addTodo, addTodoAsync, addTodoIfEmpty } from './helpers/actionCreators'
 import { thunk } from './helpers/middleware'
 
 describe('applyMiddleware', () => {
+  it('warns when dispatching during middleware setup', () => {
+    function dispatchingMiddleware(store) {
+      store.dispatch(addTodo('Dont dispatch in middleware setup'))
+      return next => action => next(action)
+    }
+
+    expect(() =>
+      applyMiddleware(dispatchingMiddleware)(createStore)(reducers.todos)
+    ).toThrow()
+  })
+
   it('wraps dispatch method with middleware once', () => {
     function test(spyOnMethods) {
       return methods => {
@@ -13,20 +23,21 @@ describe('applyMiddleware', () => {
       }
     }
 
-    const spy = expect.createSpy(() => {})
+    const spy = jest.fn()
     const store = applyMiddleware(test(spy), thunk)(createStore)(reducers.todos)
 
     store.dispatch(addTodo('Use Redux'))
     store.dispatch(addTodo('Flux FTW!'))
 
-    expect(spy.calls.length).toEqual(1)
+    expect(spy.mock.calls.length).toEqual(1)
 
-    expect(Object.keys(spy.calls[0].arguments[0])).toEqual([
-      'getState',
-      'dispatch'
+    expect(spy.mock.calls[0][0]).toHaveProperty('getState')
+    expect(spy.mock.calls[0][0]).toHaveProperty('dispatch')
+
+    expect(store.getState()).toEqual([
+      { id: 1, text: 'Use Redux' },
+      { id: 2, text: 'Flux FTW!' }
     ])
-
-    expect(store.getState()).toEqual([ { id: 1, text: 'Use Redux' }, { id: 2, text: 'Flux FTW!' } ])
   })
 
   it('passes recursive dispatches through the middleware chain', () => {
@@ -37,11 +48,11 @@ describe('applyMiddleware', () => {
       }
     }
 
-    const spy = expect.createSpy(() => {})
+    const spy = jest.fn()
     const store = applyMiddleware(test(spy), thunk)(createStore)(reducers.todos)
 
     return store.dispatch(addTodoAsync('Use Redux')).then(() => {
-      expect(spy.calls.length).toEqual(2)
+      expect(spy.mock.calls.length).toEqual(2)
     })
   })
 
@@ -93,5 +104,31 @@ describe('applyMiddleware', () => {
       ])
       done()
     })
+  })
+
+  it('passes through all arguments of dispatch calls from within middleware', () => {
+    const spy = jest.fn()
+    const testCallArgs = ['test']
+
+    function multiArgMiddleware() {
+      return next => (action, callArgs) => {
+        if (Array.isArray(callArgs)) {
+          return action(...callArgs)
+        }
+        return next(action)
+      }
+    }
+
+    function dummyMiddleware({ dispatch }) {
+      return next => action => dispatch(action, testCallArgs)
+    }
+
+    const store = createStore(
+      reducers.todos,
+      applyMiddleware(multiArgMiddleware, dummyMiddleware)
+    )
+
+    store.dispatch(spy)
+    expect(spy.mock.calls[0]).toEqual(testCallArgs)
   })
 })

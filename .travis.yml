@@ -1,11 +1,16 @@
 language: node_js
 node_js:
-  - "4"
-  - "5"
+  - "node"
+install:
+  - npm i -g npm@5.8.0
+  - npm ci
 script:
-  - npm run check:lib
-  - npm run build
-  - npm run check:examples
+  - npm run examples:lint
+  - npm run examples:test
 branches:
   only:
     - master
+    - next
+cache:
+  directories:
+    - "$HOME/.npm"

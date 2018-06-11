@@ -1,14 +1,7 @@
-import isPlainObject from 'lodash/isPlainObject'
+import $$observable from 'symbol-observable'
 
-/**
- * These are private action types reserved by Redux.
- * For any unknown actions, you must return the current state.
- * If the current state is undefined, you must return the initial state.
- * Do not reference these action types directly in your code.
- */
-export var ActionTypes = {
-  INIT: '@@redux/INIT'
-}
+import ActionTypes from './utils/actionTypes'
+import isPlainObject from './utils/isPlainObject'
 
 /**
  * Creates a Redux store that holds the state tree.
@@ -21,13 +14,13 @@ export var ActionTypes = {
  * @param {Function} reducer A function that returns the next state tree, given
  * the current state tree and the action to handle.
  *
- * @param {any} [initialState] The initial state. You may optionally specify it
+ * @param {any} [preloadedState] The initial state. You may optionally specify it
  * to hydrate the state from the server in universal apps, or to restore a
  * previously serialized user session.
  * If you use `combineReducers` to produce the root reducer function, this must be
  * an object with the same shape as `combineReducers` keys.
  *
- * @param {Function} enhancer The store enhancer. You may optionally specify it
+ * @param {Function} [enhancer] The store enhancer. You may optionally specify it
  * to enhance the store with third-party capabilities such as middleware,
  * time travel, persistence, etc. The only store enhancer that ships with Redux
  * is `applyMiddleware()`.
@@ -35,10 +28,10 @@ export var ActionTypes = {
  * @returns {Store} A Redux store that lets you read the state, dispatch actions
  * and subscribe to changes.
  */
-export default function createStore(reducer, initialState, enhancer) {
-  if (typeof initialState === 'function' && typeof enhancer === 'undefined') {
-    enhancer = initialState
-    initialState = undefined
+export default function createStore(reducer, preloadedState, enhancer) {
+  if (typeof preloadedState === 'function' && typeof enhancer === 'undefined') {
+    enhancer = preloadedState
+    preloadedState = undefined
   }
 
   if (typeof enhancer !== 'undefined') {
@@ -46,18 +39,18 @@ export default function createStore(reducer, initialState, enhancer) {
       throw new Error('Expected the enhancer to be a function.')
     }
 
-    return enhancer(createStore)(reducer, initialState)
+    return enhancer(createStore)(reducer, preloadedState)
   }
 
   if (typeof reducer !== 'function') {
     throw new Error('Expected the reducer to be a function.')
   }
 
-  var currentReducer = reducer
-  var currentState = initialState
-  var currentListeners = []
-  var nextListeners = currentListeners
-  var isDispatching = false
+  let currentReducer = reducer
+  let currentState = preloadedState
+  let currentListeners = []
+  let nextListeners = currentListeners
+  let isDispatching = false
 
   function ensureCanMutateNextListeners() {
     if (nextListeners === currentListeners) {
@@ -71,6 +64,14 @@ export default function createStore(reducer, initialState, enhancer) {
    * @returns {any} The current state tree of your application.
    */
   function getState() {
+    if (isDispatching) {
+      throw new Error(
+        'You may not call store.getState() while the reducer is executing. ' +
+          'The reducer has already received the state as an argument. ' +
+          'Pass it down from the top reducer instead of reading it from the store.'
+      )
+    }
+
     return currentState
   }
 
@@ -88,7 +89,7 @@ export default function createStore(reducer, initialState, enhancer) {
    * However, the next `dispatch()` call, whether nested or not, will use a more
    * recent snapshot of the subscription list.
    *
-   * 2. The listener should not expect to see all states changes, as the state
+   * 2. The listener should not expect to see all state changes, as the state
    * might have been updated multiple times during a nested `dispatch()` before
    * the listener is called. It is, however, guaranteed that all subscribers
    * registered before the `dispatch()` started will be called with the latest
@@ -99,10 +100,19 @@ export default function createStore(reducer, initialState, enhancer) {
    */
   function subscribe(listener) {
     if (typeof listener !== 'function') {
-      throw new Error('Expected listener to be a function.')
+      throw new Error('Expected the listener to be a function.')
     }
 
-    var isSubscribed = true
+    if (isDispatching) {
+      throw new Error(
+        'You may not call store.subscribe() while the reducer is executing. ' +
+          'If you would like to be notified after the store has been updated, subscribe from a ' +
+          'component and invoke store.getState() in the callback to access the latest state. ' +
+          'See https://redux.js.org/api-reference/store#subscribe(listener) for more details.'
+      )
+    }
+
+    let isSubscribed = true
 
     ensureCanMutateNextListeners()
     nextListeners.push(listener)
@@ -112,10 +122,17 @@ export default function createStore(reducer, initialState, enhancer) {
         return
       }
 
+      if (isDispatching) {
+        throw new Error(
+          'You may not unsubscribe from a store listener while the reducer is executing. ' +
+            'See https://redux.js.org/api-reference/store#subscribe(listener) for more details.'
+        )
+      }
+
       isSubscribed = false
 
       ensureCanMutateNextListeners()
-      var index = nextListeners.indexOf(listener)
+      const index = nextListeners.indexOf(listener)
       nextListeners.splice(index, 1)
     }
   }
@@ -149,14 +166,14 @@ export default function createStore(reducer, initialState, enhancer) {
     if (!isPlainObject(action)) {
       throw new Error(
         'Actions must be plain objects. ' +
-        'Use custom middleware for async actions.'
+          'Use custom middleware for async actions.'
       )
     }
 
     if (typeof action.type === 'undefined') {
       throw new Error(
         'Actions may not have an undefined "type" property. ' +
-        'Have you misspelled a constant?'
+          'Have you misspelled a constant?'
       )
     }
 
@@ -171,9 +188,10 @@ export default function createStore(reducer, initialState, enhancer) {
       isDispatching = false
     }
 
-    var listeners = currentListeners = nextListeners
-    for (var i = 0; i < listeners.length; i++) {
-      listeners[i]()
+    const listeners = (currentListeners = nextListeners)
+    for (let i = 0; i < listeners.length; i++) {
+      const listener = listeners[i]
+      listener()
     }
 
     return action
@@ -195,7 +213,46 @@ export default function createStore(reducer, initialState, enhancer) {
     }
 
     currentReducer = nextReducer
-    dispatch({ type: ActionTypes.INIT })
+    dispatch({ type: ActionTypes.REPLACE })
+  }
+
+  /**
+   * Interoperability point for observable/reactive libraries.
+   * @returns {observable} A minimal observable of state changes.
+   * For more information, see the observable proposal:
+   * https://github.com/tc39/proposal-observable
+   */
+  function observable() {
+    const outerSubscribe = subscribe
+    return {
+      /**
+       * The minimal observable subscription method.
+       * @param {Object} observer Any object that can be used as an observer.
+       * The observer object should have a `next` method.
+       * @returns {subscription} An object with an `unsubscribe` method that can
+       * be used to unsubscribe the observable from the store, and prevent further
+       * emission of values from the observable.
+       */
+      subscribe(observer) {
+        if (typeof observer !== 'object' || observer === null) {
+          throw new TypeError('Expected the observer to be an object.')
+        }
+
+        function observeState() {
+          if (observer.next) {
+            observer.next(getState())
+          }
+        }
+
+        observeState()
+        const unsubscribe = outerSubscribe(observeState)
+        return { unsubscribe }
+      },
+
+      [$$observable]() {
+        return this
+      }
+    }
   }
 
   // When a store is created, an "INIT" action is dispatched so that every
@@ -207,6 +264,7 @@ export default function createStore(reducer, initialState, enhancer) {
     dispatch,
     subscribe,
     getState,
-    replaceReducer
+    replaceReducer,
+    [$$observable]: observable
   }
 }
